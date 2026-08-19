@@ -747,16 +747,42 @@ function renderReceipt(){
   `;
 }
 
-/* ================= STORAGE (cloud when running inside Claude, local fallback otherwise) ================= */
-const CLOUD = !!(window.storage && window.storage.set && window.storage.get && window.storage.list && window.storage.delete);
+/* ================= STORAGE =================
+   Priority: 1) Pages Functions + KV API (real cross-device sync, when self-hosted)
+             2) Claude's window.storage (when running inside a Claude artifact)
+             3) Browser localStorage (last-resort, per-device only)
+*/
+let STORAGE_MODE = 'local';
+
+async function detectStorageMode(){
+  try{
+    const res = await fetch('/api/kv?prefix=product:', { method: 'GET' });
+    if (res.ok){ STORAGE_MODE = 'api'; return; }
+  } catch(e){ /* no API route available, e.g. running outside the Pages deploy */ }
+
+  if (window.storage && window.storage.set && window.storage.get && window.storage.list && window.storage.delete){
+    STORAGE_MODE = 'cloud';
+    return;
+  }
+  STORAGE_MODE = 'local';
+}
 
 async function storeSet(key, value){
-  if (CLOUD) return window.storage.set(key, value, false);
+  if (STORAGE_MODE === 'api'){
+    const res = await fetch('/api/kv/' + encodeURIComponent(key), { method: 'PUT', body: value });
+    return res.ok ? { key, value } : null;
+  }
+  if (STORAGE_MODE === 'cloud') return window.storage.set(key, value, false);
   localStorage.setItem(key, value);
   return { key, value };
 }
 async function storeGet(key){
-  if (CLOUD){
+  if (STORAGE_MODE === 'api'){
+    const res = await fetch('/api/kv/' + encodeURIComponent(key));
+    if (!res.ok) return null;
+    return { key, value: await res.text() };
+  }
+  if (STORAGE_MODE === 'cloud'){
     try{ return await window.storage.get(key, false); }
     catch(e){ return null; } // key not found
   }
@@ -764,11 +790,21 @@ async function storeGet(key){
   return v === null ? null : { key, value: v };
 }
 async function storeDelete(key){
-  if (CLOUD) return window.storage.delete(key, false);
+  if (STORAGE_MODE === 'api'){
+    await fetch('/api/kv/' + encodeURIComponent(key), { method: 'DELETE' });
+    return;
+  }
+  if (STORAGE_MODE === 'cloud') return window.storage.delete(key, false);
   localStorage.removeItem(key);
 }
 async function storeList(prefix){
-  if (CLOUD){
+  if (STORAGE_MODE === 'api'){
+    const res = await fetch('/api/kv?prefix=' + encodeURIComponent(prefix));
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.keys || [];
+  }
+  if (STORAGE_MODE === 'cloud'){
     const res = await window.storage.list(prefix, false);
     return (res && res.keys) || [];
   }
@@ -822,7 +858,10 @@ async function loadProductList(){
   }
 
   $('savedCount').textContent = `(${keys.length})`;
-  $('storageNote').textContent = CLOUD ? 'Synced to your account' : 'Saved on this device/browser';
+  $('storageNote').textContent =
+    STORAGE_MODE === 'api' ? 'Synced across all your devices' :
+    STORAGE_MODE === 'cloud' ? 'Synced to your Claude account' :
+    'Saved on this device/browser only';
 
   if (keys.length === 0){
     listEl.innerHTML = `<div class="empty-state">No products saved yet.<br>Calculate one in "New Entry" and hit Save.</div>`;
@@ -897,7 +936,7 @@ function switchTab(tab){
 }
 
 /* ================= INIT ================= */
-function init(){
+async function init(){
   fillForm(defaultForm());
   $('editingName').textContent = 'new';
 
@@ -920,6 +959,7 @@ function init(){
   $('todayLine').textContent = today.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 
   renderReceipt();
+  await detectStorageMode();
   loadProductList();
 }
 
