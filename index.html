@@ -431,6 +431,56 @@
   .toast.show{ opacity: 1; transform: translateX(-50%) translateY(-4px); }
 
   ::selection{ background: var(--accent); color: var(--accent-ink); }
+
+  /* ---------- Auth gate ---------- */
+  .auth-gate{
+    position: fixed;
+    inset: 0;
+    background: rgba(35,41,31,0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    padding: 20px;
+  }
+  .auth-box{
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+    max-width: 360px;
+    padding: 28px 24px;
+    text-align: center;
+  }
+  .auth-box h2{
+    font-family:'Fraunces', serif;
+    font-size: 22px;
+    margin: 0 0 10px;
+  }
+  .auth-box p{
+    font-size: 13px;
+    color: var(--ink-soft);
+    margin: 0 0 18px;
+    line-height: 1.5;
+  }
+  .auth-box code{
+    font-family:'IBM Plex Mono', monospace;
+    background: var(--paper-2);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 12px;
+  }
+
+  .user-bar{
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 10px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-soft);
+    margin: 0 0 14px;
+  }
 </style>
 </head>
 <body>
@@ -443,6 +493,19 @@
     </div>
     <div class="today" id="todayLine"></div>
   </header>
+
+  <div id="authGate" class="auth-gate" style="display:none;">
+    <div class="auth-box">
+      <h2>Sign in to continue</h2>
+      <p>Your product data is private to your Google account and stays in sync across every device you sign in on.</p>
+      <button id="signInBtn" class="btn accent">Sign in with Google</button>
+    </div>
+  </div>
+
+  <div class="user-bar" id="userBar">
+    <span id="userEmail"></span>
+    <button class="icon-btn" id="signOutBtn">Sign out</button>
+  </div>
 
   <div class="tabs">
     <button class="tab-btn active" data-tab="calc" id="tabCalcBtn">New Entry</button>
@@ -570,6 +633,9 @@
 
 <div class="toast" id="toast"></div>
 
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
 <script>
 /* ================= FEE TABLES ================= */
 /* Standard size-band fee chart (flat, no zone) — corrected per seller's current rate card */
@@ -747,88 +813,79 @@ function renderReceipt(){
   `;
 }
 
-/* ================= STORAGE =================
-   Priority: 1) Pages Functions + KV API (real cross-device sync, when self-hosted)
-             2) Claude's window.storage (when running inside a Claude artifact)
-             3) Browser localStorage (last-resort, per-device only)
+/* ================= FIREBASE =================
+   Fill these in from Firebase console → Project settings → Your apps → Web app config.
 */
-let STORAGE_MODE = 'local';
+// Import the functions you need from the SDKs you need
+import { initializeApp } from "firebase/app";
+import { getAnalytics } from "firebase/analytics";
+// TODO: Add SDKs for Firebase products that you want to use
+// https://firebase.google.com/docs/web/setup#available-libraries
 
-async function detectStorageMode(){
-  try{
-    const res = await fetch('/api/kv?prefix=product:', { method: 'GET' });
-    if (res.ok){ STORAGE_MODE = 'api'; return; }
-  } catch(e){ /* no API route available, e.g. running outside the Pages deploy */ }
+// Your web app's Firebase configuration
+// For Firebase JS SDK v7.20.0 and later, measurementId is optional
+const firebaseConfig = {
+  apiKey: "AIzaSyB12TNzocQLJqKvxJc1EEWQr4cBJAcLRhw",
+  authDomain: "tailox-profit.firebaseapp.com",
+  projectId: "tailox-profit",
+  storageBucket: "tailox-profit.firebasestorage.app",
+  messagingSenderId: "353492546275",
+  appId: "1:353492546275:web:a8759ee7f584f36772cbd6",
+  measurementId: "G-XKYV7S4VR4"
+};
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const analytics = getAnalytics(app);
 
-  if (window.storage && window.storage.set && window.storage.get && window.storage.list && window.storage.delete){
-    STORAGE_MODE = 'cloud';
-    return;
-  }
-  STORAGE_MODE = 'local';
-}
+let db = null;
+let currentUser = null;
+let unsubscribeSnapshot = null;
 
-async function storeSet(key, value){
-  if (STORAGE_MODE === 'api'){
-    const res = await fetch('/api/kv/' + encodeURIComponent(key), { method: 'PUT', body: value });
-    return res.ok ? { key, value } : null;
-  }
-  if (STORAGE_MODE === 'cloud') return window.storage.set(key, value, false);
-  localStorage.setItem(key, value);
-  return { key, value };
-}
-async function storeGet(key){
-  if (STORAGE_MODE === 'api'){
-    const res = await fetch('/api/kv/' + encodeURIComponent(key));
-    if (!res.ok) return null;
-    return { key, value: await res.text() };
-  }
-  if (STORAGE_MODE === 'cloud'){
-    try{ return await window.storage.get(key, false); }
-    catch(e){ return null; } // key not found
-  }
-  const v = localStorage.getItem(key);
-  return v === null ? null : { key, value: v };
-}
-async function storeDelete(key){
-  if (STORAGE_MODE === 'api'){
-    await fetch('/api/kv/' + encodeURIComponent(key), { method: 'DELETE' });
-    return;
-  }
-  if (STORAGE_MODE === 'cloud') return window.storage.delete(key, false);
-  localStorage.removeItem(key);
-}
-async function storeList(prefix){
-  if (STORAGE_MODE === 'api'){
-    const res = await fetch('/api/kv?prefix=' + encodeURIComponent(prefix));
-    if (!res.ok) return [];
-    const data = await res.json();
-    return data.keys || [];
-  }
-  if (STORAGE_MODE === 'cloud'){
-    const res = await window.storage.list(prefix, false);
-    return (res && res.keys) || [];
-  }
-  const keys = [];
-  for (let i = 0; i < localStorage.length; i++){
-    const k = localStorage.key(i);
-    if (k && k.startsWith(prefix)) keys.push(k);
-  }
-  return keys;
+function firebaseConfigured(){
+  return firebaseConfig.apiKey && firebaseConfig.apiKey !== "YOUR_API_KEY";
 }
 
+function initFirebase(){
+  if (!firebaseConfigured()) return false;
+  firebase.initializeApp(firebaseConfig);
+  db = firebase.firestore();
+  return true;
+}
+
+function signIn(){
+  const provider = new firebase.auth.GoogleAuthProvider();
+  firebase.auth().signInWithPopup(provider).catch(e => {
+    console.error(e);
+    showToast('Sign-in failed — try again');
+  });
+}
+
+function signOutUser(){
+  firebase.auth().signOut();
+}
+
+function showAuthGate(show){
+  $('authGate').style.display = show ? 'flex' : 'none';
+}
+
+/* ================= PRODUCT DATA (Firestore, per-user private collection) ================= */
 let currentSlug = null; // slug of product currently loaded for editing, or null = new
+
+function productsCollection(){
+  // Each signed-in user's products live under their own uid — private by construction.
+  return db.collection('users').doc(currentUser.uid).collection('products');
+}
 
 async function saveProduct(){
   const name = $('productName').value.trim();
   if (!name){ showToast('Give the product a name first'); return; }
+  if (!currentUser){ showToast('Sign in first'); return; }
   const slug = slugify(name);
   const data = { name, ...readForm(), savedAt: new Date().toISOString() };
   try{
-    const res = await storeSet('product:' + slug, JSON.stringify(data));
-    if (!res){ showToast('Could not save — try again'); return; }
+    await productsCollection().doc(slug).set(data);
     currentSlug = slug;
     showToast('Saved "' + name + '"');
-    await loadProductList();
   } catch(e){
     console.error(e);
     showToast('Save failed — try again');
@@ -838,42 +895,23 @@ async function saveProduct(){
 async function deleteProduct(slug, name){
   if (!confirm(`Delete "${name}"? This can't be undone.`)) return;
   try{
-    await storeDelete('product:' + slug);
+    await productsCollection().doc(slug).delete();
     showToast('Deleted "' + name + '"');
     if (currentSlug === slug){ currentSlug = null; }
-    await loadProductList();
   } catch(e){
     console.error(e);
     showToast('Delete failed');
   }
 }
 
-async function loadProductList(){
+function renderProductList(products){
   const listEl = $('productList');
-  let keys = [];
-  try{
-    keys = await storeList('product:');
-  } catch(e){
-    console.error(e);
-  }
+  $('savedCount').textContent = `(${products.length})`;
+  $('storageNote').textContent = 'Synced across all your devices';
 
-  $('savedCount').textContent = `(${keys.length})`;
-  $('storageNote').textContent =
-    STORAGE_MODE === 'api' ? 'Synced across all your devices' :
-    STORAGE_MODE === 'cloud' ? 'Synced to your Claude account' :
-    'Saved on this device/browser only';
-
-  if (keys.length === 0){
+  if (products.length === 0){
     listEl.innerHTML = `<div class="empty-state">No products saved yet.<br>Calculate one in "New Entry" and hit Save.</div>`;
     return;
-  }
-
-  const products = [];
-  for (const key of keys){
-    try{
-      const res = await storeGet(key);
-      if (res && res.value) products.push(JSON.parse(res.value));
-    } catch(e){ /* skip missing */ }
   }
 
   products.sort((a, b) => a.name.localeCompare(b.name));
@@ -904,9 +942,9 @@ async function loadProductList(){
     btn.addEventListener('click', async () => {
       const slug = btn.dataset.slug;
       try{
-        const res = await storeGet('product:' + slug);
-        if (res && res.value){
-          const p = JSON.parse(res.value);
+        const doc = await productsCollection().doc(slug).get();
+        if (doc.exists){
+          const p = doc.data();
           fillForm(p);
           currentSlug = slug;
           $('editingName').textContent = p.name;
@@ -921,6 +959,18 @@ async function loadProductList(){
   });
 }
 
+function startProductListener(){
+  if (unsubscribeSnapshot) unsubscribeSnapshot();
+  // Real-time listener: updates instantly if you save/delete from another device.
+  unsubscribeSnapshot = productsCollection().onSnapshot(snap => {
+    const products = snap.docs.map(d => d.data());
+    renderProductList(products);
+  }, e => {
+    console.error(e);
+    showToast('Could not load saved products');
+  });
+}
+
 function escapeHtml(s){
   return s.replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 }
@@ -932,7 +982,6 @@ function switchTab(tab){
   $('tabSaved').style.display = isCalc ? 'none' : '';
   $('tabCalcBtn').classList.toggle('active', isCalc);
   $('tabSavedBtn').classList.toggle('active', !isCalc);
-  if (!isCalc) loadProductList();
 }
 
 /* ================= INIT ================= */
@@ -954,13 +1003,36 @@ async function init(){
 
   $('tabCalcBtn').addEventListener('click', () => switchTab('calc'));
   $('tabSavedBtn').addEventListener('click', () => switchTab('saved'));
+  $('signInBtn').addEventListener('click', signIn);
+  $('signOutBtn').addEventListener('click', signOutUser);
 
   const today = new Date();
   $('todayLine').textContent = today.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 
   renderReceipt();
-  await detectStorageMode();
-  loadProductList();
+
+  if (!firebaseConfigured()){
+    $('authGate').innerHTML = `
+      <div class="auth-box">
+        <h2>Firebase not configured yet</h2>
+        <p>Add your Firebase project's web config into <code>firebaseConfig</code> near the top of the script, then reload.</p>
+      </div>`;
+    showAuthGate(true);
+    return;
+  }
+
+  initFirebase();
+  firebase.auth().onAuthStateChanged(user => {
+    currentUser = user;
+    if (user){
+      showAuthGate(false);
+      $('userEmail').textContent = user.email || '';
+      startProductListener();
+    } else {
+      showAuthGate(true);
+      if (unsubscribeSnapshot){ unsubscribeSnapshot(); unsubscribeSnapshot = null; }
+    }
+  });
 }
 
 init();
