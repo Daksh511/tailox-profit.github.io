@@ -816,26 +816,14 @@ function renderReceipt(){
 /* ================= FIREBASE =================
    Fill these in from Firebase console → Project settings → Your apps → Web app config.
 */
-// Import the functions you need from the SDKs you need
-import { initializeApp } from "firebase/app";
-import { getAnalytics } from "firebase/analytics";
-// TODO: Add SDKs for Firebase products that you want to use
-// https://firebase.google.com/docs/web/setup#available-libraries
-
-// Your web app's Firebase configuration
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
   apiKey: "AIzaSyB12TNzocQLJqKvxJc1EEWQr4cBJAcLRhw",
   authDomain: "tailox-profit.firebaseapp.com",
   projectId: "tailox-profit",
   storageBucket: "tailox-profit.firebasestorage.app",
   messagingSenderId: "353492546275",
-  appId: "1:353492546275:web:a8759ee7f584f36772cbd6",
-  measurementId: "G-XKYV7S4VR4"
+  appId: "1:353492546275:web:a8759ee7f584f36772cbd6"
 };
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-const analytics = getAnalytics(app);
 
 let db = null;
 let currentUser = null;
